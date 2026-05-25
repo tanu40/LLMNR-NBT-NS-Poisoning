@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+  <title>CTF: LLMNR/NBT-NS Poisoning Detection | Responder Attack</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', 'Fira Code', system-ui, monospace; }
+    body {
+      background: linear-gradient(160deg, #0a0015 0%, #150030 50%, #0a0015 100%);
+      min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      padding: 1.5rem; margin: 0;
+    }
+    .container {
+      max-width: 1200px; width: 100%; background: rgba(15, 5, 30, 0.95);
+      backdrop-filter: blur(28px); border: 1px solid rgba(180, 50, 255, 0.4);
+      box-shadow: 0 25px 50px rgba(150, 0, 255, 0.25); border-radius: 2.5rem;
+      padding: 2rem; color: #d4c8f0;
+    }
+    h1 { font-size: 2.2rem; font-weight: 700; text-align: center; background: linear-gradient(135deg, #c880ff, #7b00ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 0.4rem; letter-spacing: 1px; }
+    .subtitle { text-align: center; color: #b098d0; margin-bottom: 1.8rem; border-bottom: 1px dashed #3a2050; padding-bottom: 1rem; font-style: italic; }
+    .panel { background: rgba(10, 5, 20, 0.9); backdrop-filter: blur(12px); border-radius: 1.8rem; padding: 1.7rem; border: 1px solid #3a2050; margin-bottom: 1.8rem; }
+    .hidden { display: none !important; }
+    input, button { background: #150a20; border: 1px solid #5a3080; border-radius: 2rem; padding: 0.7rem 1.3rem; color: #e0d0f0; font-weight: 500; outline: none; font-size: 0.9rem; }
+    input:focus { border-color: #b050ff; box-shadow: 0 0 14px #8800ff; }
+    button { background: #201030; border-color: #8b40cc; cursor: pointer; font-weight: bold; display: inline-flex; align-items: center; gap: 0.3rem; }
+    button:hover { background: #301840; border-color: #b060ff; box-shadow: 0 0 18px #9900ff; }
+    .task-card { background: #0d0518; border-left: 6px solid #b050ff; padding: 1.2rem; border-radius: 1.3rem; margin: 1.2rem 0; animation: fadeIn 0.35s ease; }
+    @keyframes fadeIn { 0% { opacity: 0; transform: translateY(8px); } 100% { opacity: 1; transform: translateY(0); } }
+    .log-line { background: #0a0315; border: 1px solid #2a1540; padding: 0.5rem 1rem; border-radius: 0.6rem; margin: 0.4rem 0; font-family: 'Fira Code', monospace; font-size: 0.78rem; white-space: pre-wrap; color: #c0a8e0; }
+    .badge { background: #2a1540; padding: 0.2rem 0.9rem; border-radius: 20px; font-size: 0.8rem; }
+    .packet-snippet { background: #000008; border: 2px solid #ff00ff; border-radius: 1rem; padding: 1rem; margin: 1rem 0; font-family: 'Fira Code', monospace; font-size: 0.75rem; color: #c880ff; max-height: 350px; overflow-y: auto; box-shadow: 0 0 20px rgba(255,0,255,0.2); }
+    .highlight-field { background: #1a0030; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+    .highlight-danger { background: #300010; color: #ff6688; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+    .highlight-warn { background: #302000; color: #ffcc44; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+    .attack-diagram { background: #0a0315; border: 2px solid #b050ff; border-radius: 1rem; padding: 1.5rem; margin: 1rem 0; position: relative; min-height: 200px; }
+    .attack-node { position: absolute; padding: 0.5rem 1rem; border-radius: 2rem; font-size: 0.7rem; font-weight: bold; }
+    .attack-victim { background: #1a1a40; border: 2px solid #4488cc; color: #88bbff; }
+    .attack-attacker { background: #3a1010; border: 2px solid #ff4444; color: #ff8888; animation: pulseRed 1.5s infinite; }
+    @keyframes pulseRed { 0%,100%{box-shadow:0 0 5px #ff4444} 50%{box-shadow:0 0 25px #ff0000} }
+    .attack-arrow { position: absolute; height: 2px; background: #ff4444; transform-origin: left center; }
+    .flag-box { background: #1a0030; border: 2px dashed #ffd700; padding: 0.9rem; border-radius: 20px; text-align: center; font-weight: bold; font-size: 1.4rem; letter-spacing: 3px; color: #ffd700; animation: glowGold 1.7s infinite; }
+    @keyframes glowGold { 0%{box-shadow:0 0 5px #ffd700} 50%{box-shadow:0 0 30px #ffaa00} 100%{box-shadow:0 0 5px #ffd700} }
+    .success-msg { color: #9effb7; font-weight: bold; }
+    .toast { position: fixed; top: 20px; right: 20px; background: #1a0a30; border: 1px solid #b050ff; padding: 1rem 1.5rem; border-radius: 2rem; color: #e0d0f0; font-weight: bold; z-index: 9999; animation: slideIn 0.3s ease, fadeOut 0.3s 2.5s forwards; }
+    @keyframes slideIn { from{transform:translateX(100px);opacity:0} to{transform:translateX(0);opacity:1} }
+    @keyframes fadeOut { to{opacity:0;transform:translateY(-10px)} }
+    code { background: #150a20; padding: 0.2rem 0.6rem; border-radius: 12px; font-family: 'Fira Code', monospace; }
+  </style>
+</head>
+<body>
+<div class="container" id="appContainer">
+
+  <div id="loginSection">
+    <h1>🎯 LLMNR POISON HUNTER</h1>
+    <div class="subtitle">LLMNR/NBT-NS Poisoning Detection · Responder Attack Analysis</div>
+    <div class="panel">
+      <div style="text-align:center;">
+        <input type="text" id="studentNameInput" placeholder="Enter your name" autocomplete="off" style="width:70%;">
+        <input type="password" id="studentPassInput" placeholder="Enter password" style="width:70%; margin-top:0.7rem;">
+        <button id="studentSubmitLogin" style="margin-top:0.8rem;">🔐 Enter CTF Lab</button>
+        <p style="font-size:0.8rem; color:#b098d0; margin-top:0.5rem;">
+          Password: <code>45_2026</code>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div id="studentDashboard" class="hidden">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <h2 style="color:#c880ff;">👤 <span id="displayStudentName"></span></h2>
+      <button id="logoutStudentBtn">🚪 Logout</button>
+    </div>
+    <div id="taskContainer"></div>
+  </div>
+
+</div>
+
+<script>
+(function() {
+    const FIXED_PASSWORD = '45_2026';
+    const STORAGE_KEY = 'llmnr_ctf_progress';
+    
+    let currentUser = null;
+    let completedTasks = [];
+
+    function loadProgress() {
+        try { const s=localStorage.getItem(STORAGE_KEY); if(s){const d=JSON.parse(s); completedTasks=d.completed||[]; return d.name; } } catch(e) {}
+        return null;
+    }
+    function saveProgress() { if(currentUser) localStorage.setItem(STORAGE_KEY, JSON.stringify({name:currentUser.name, completed:currentUser.completedTasks})); }
+
+    const tasks = [
+      { id: 1, title: "🎯 Task 1: Identify Attack Technique", desc: "What attack technique is being used? (two words)", answer: "llmnr poisoning", extra: "technique" },
+      { id: 2, title: "🔍 Task 2: Find Spoofed Responses", desc: "Which IP is sending spoofed LLMNR responses? (format: x.x.x.x)", answer: "10.0.1.50", extra: "spoof" },
+      { id: 3, title: "🔑 Task 3: Extract NTLMv2 Hash", desc: "What username's hash was captured? (username)", answer: "jdoe", extra: "hash" },
+      { id: 4, title: "🛡️ Task 4: Mitigation via GPO", desc: "What GPO setting disables LLMNR? (exact setting name)", answer: "Turn off multicast name resolution", extra: "gpo" },
+      { id: 5, title: "📊 Task 5: Monitor for Similar Events", desc: "Which Event ID monitors NTLM authentication? (number)", answer: "4624", extra: "monitor" }
+    ];
+
+    const packetCapture = `
+[LLMNR Query] 192.168.1.100 → 224.0.0.252 (LLMNR Multicast)
+  Query: <span class="highlight-warn">\\\\fileshare</span> (non-existent host)
+  Type: A/AAAA
+
+[LLMNR Response] <span class="highlight-danger">10.0.1.50 → 192.168.1.100</span> ⚠️ SPOOFED!
+  Response: \\\\fileshare = 10.0.1.50
+  TTL: 30
+
+[SMB Connection] 192.168.1.100 → 10.0.1.50
+  Negotiate Protocol Request
+  NTLMSSP_NEGOTIATE
+
+[NTLM Challenge] 10.0.1.50 → 192.168.1.100
+  NTLMSSP_CHALLENGE
+
+[NTLM Auth] 192.168.1.100 → 10.0.1.50
+  <span class="highlight-danger">NTLMv2 Hash Captured!</span>
+  Username: <span class="highlight-danger">jdoe</span>
+  Domain: CORP
+  Hash: jdoe::CORP:1122334455667788:AAAABBBBCCCCDDDDEEEEFFFF00001111:0101000000000000...
+
+[LLMNR Query] 192.168.1.101 → 224.0.0.252
+  Query: <span class="highlight-warn">\\\\printserver</span>
+
+[LLMNR Response] <span class="highlight-danger">10.0.1.50 → 192.168.1.101</span> ⚠️ SPOOFED!
+  Response: \\\\printserver = 10.0.1.50
+
+[SMB Connection] 192.168.1.101 → 10.0.1.50
+  NTLMv2 Hash Captured!
+  Username: <span class="highlight-danger">asmith</span>
+  Domain: CORP
+    `.trim();
+
+    function showToast(m, e) {
+      const x=document.querySelector('.toast'); if(x)x.remove();
+      const t=document.createElement('div'); t.className='toast';
+      t.style.background=e?'#3a1a1a':'#1a0a30'; t.style.borderColor=e?'#aa3030':'#b050ff';
+      t.style.color=e?'#ffaaaa':'#e0d0f0'; t.textContent=m;
+      document.body.appendChild(t); setTimeout(()=>{if(t.parentNode)t.remove();},3000);
+    }
+
+    function createAttackDiagram() {
+      let h='<p style="color:#b050ff;">⚔️ Attack Flow Diagram:</p>';
+      h+='<div class="attack-diagram" style="position:relative;min-height:200px;">';
+      h+='<div class="attack-node attack-victim" style="left:8%;top:30%;">Victim<br>192.168.1.100</div>';
+      h+='<div class="attack-node attack-attacker" style="left:75%;top:30%;">Attacker<br>10.0.1.50</div>';
+      h+='<div style="position:absolute;left:25%;top:35%;color:#ffcc44;font-size:0.7rem;">❶ LLMNR Query</div>';
+      h+='<div style="position:absolute;left:60%;top:50%;color:#ff4444;font-size:0.7rem;">❷ Spoofed Response</div>';
+      h+='<div style="position:absolute;left:25%;top:65%;color:#ff8888;font-size:0.7rem;">❸ NTLMv2 Hash Sent</div>';
+      h+='<div class="attack-arrow" style="left:22%;top:38%;width:55%;"></div>';
+      h+='<div class="attack-arrow" style="left:75%;top:52%;width:53%;transform:rotate(180deg);"></div>';
+      h+='<div class="attack-arrow" style="left:22%;top:66%;width:55%;"></div>';
+      h+='</div>';
+      return h;
+    }
+
+    function renderTasks() {
+      if(!currentUser) return;
+      document.getElementById('displayStudentName').innerText=currentUser.name;
+      const c=document.getElementById('taskContainer'), done=currentUser.completedTasks||[];
+      let h='<h3>🎯 LLMNR Poisoning Investigation</h3>';
+      h+=createAttackDiagram();
+      h+='<p style="color:#b050ff;margin-top:1rem;">📡 Packet Capture Snippet:</p>';
+      h+=`<div class="packet-snippet"><pre style="white-space:pre-wrap;">${packetCapture}</pre></div>`;
+      h+='<p style="font-size:0.7rem;color:#b098d0;">🔴 Red = Spoofed/Attacker | 🟡 Yellow = Suspicious Query | 🔵 Blue = Victim</p>';
+      tasks.forEach(t=>{
+        const dn=done.includes(t.id);
+        h+=`<div class="task-card" style="border-left-color:${dn?'#2ecc71':'#b050ff'};"><strong>${t.title}</strong> <span class="badge">${dn?'✅ Done':'🔒 Pending'}</span><p>${t.desc}</p>`;
+        if(t.extra==='gpo'){
+          h+='<div class="log-line">📋 GPO: Computer Config → Admin Templates → Network → DNS Client</div>';
+          h+='<div class="log-line">Setting: <span style="color:#c880ff;">Turn off multicast name resolution</span></div>';
+        } else if(t.extra==='monitor'){
+          h+='<div class="log-line">📊 Monitor Event ID 4624 (Logon) for NTLM authentication patterns</div>';
+          h+='<div class="log-line">🔍 Also watch for LLMNR traffic on UDP 5355</div>';
+        }
+        if(!dn) h+=`<div style="display:flex;gap:0.5rem;margin-top:0.5rem;"><input type="text" id="ai${t.id}" placeholder="Your answer" style="flex:1;"><button onclick="window.submitT(${t.id})">✅ Submit</button></div>`;
+        else h+='<p class="success-msg">✔ Completed</p>';
+        h+='</div>';
+      });
+      if(done.length===tasks.length) h+='<div class="flag-box">🏆 FLAG{LLMNR_POISONING} 🏆</div>';
+      c.innerHTML=h;
+    }
+
+    window.submitT = id => {
+      if(!currentUser) return;
+      const inp=document.getElementById('ai'+id); if(!inp) return;
+      const a=inp.value.trim(), t=tasks.find(x=>x.id===id); if(!t) return;
+      let ok=false;
+      if(id===1){const l=a.toLowerCase(); ok=l.includes('llmnr')&&l.includes('poisoning');}
+      else if(id===4){const l=a.toLowerCase(); ok=l.includes('multicast')&&l.includes('name')&&l.includes('resolution');}
+      else ok=a.toLowerCase()===t.answer.toLowerCase();
+      if(ok){if(!currentUser.completedTasks.includes(id)){currentUser.completedTasks.push(id);saveProgress();}showToast('✅ Correct!');renderTasks();}
+      else{showToast('❌ Incorrect.',true);inp.style.animation='shake 0.5s ease';setTimeout(()=>inp.style.animation='',500);}
+    };
+
+    function showLogin(){document.getElementById('loginSection').classList.remove('hidden');document.getElementById('studentDashboard').classList.add('hidden');currentUser=null;}
+    function showDash(){document.getElementById('loginSection').classList.add('hidden');document.getElementById('studentDashboard').classList.remove('hidden');renderTasks();}
+
+    document.addEventListener('DOMContentLoaded',()=>{
+      const sn=loadProgress(); if(sn) document.getElementById('studentNameInput').value=sn;
+      document.getElementById('studentSubmitLogin').addEventListener('click',()=>{
+        const n=document.getElementById('studentNameInput').value.trim();
+        const p=document.getElementById('studentPassInput').value.trim();
+        if(!n||!p){showToast('Enter name and password.',true);return;}
+        if(p!==FIXED_PASSWORD){showToast('Invalid password. Use: 45_2026',true);return;}
+        currentUser={name:n,completedTasks:[...completedTasks]};
+        document.getElementById('studentPassInput').value=''; showDash();
+      });
+      document.getElementById('logoutStudentBtn').addEventListener('click',()=>{showToast('Logged out.');showLogin();});
+      const s=document.createElement('style');s.textContent='@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-10px)}75%{transform:translateX(10px)}}';
+      document.head.appendChild(s); showLogin();
+    });
+})();
+</script>
+</body>
+</html>
